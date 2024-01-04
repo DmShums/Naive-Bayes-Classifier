@@ -1,0 +1,306 @@
+---
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Probability and Statistics
+
+# Lab Assignment 1: Naive Bayes Classifier
+
+## Work breakdown
+
+-   Viktoria Prokhorova: Data and metrics visualization
+-   Dmytro Shumskyi: Predict and fit methods
+-   Mykola Vysotskyi: Predict method, metrics functions, data
+    pre-processing
+
+## Data description
+
+-   **4 - spam** This last data set contains SMS messages classified as
+    spam or non-spam (ham in the data set). The task is to determine
+    whether a given message is spam or non-spam.
+
+Each data set consists of two files: *train.csv* and *test.csv*. The
+first one you will need find the probabilities distributions for each of
+the features, while the second one is needed for checking how well your
+classifier works.
+
+## **Outline of the work**
+
+1.  **Data pre-processing** (includes removing punctuation marks and
+    stop words, representing each message as a bag-of-words)
+
+2.  **Data visualization**
+
+3.  **Classifier implementation** (using the training set, calculate all
+    the conditional probabilities in formula (1) and then use those to
+    predict classes for messages in the testing set)
+
+4.  **Measurements of effectiveness of your classifier** (accuracy,
+    precision and recall curves, F1 score metric etc)
+
+5.  **Conclusions**
+
+## Data pre-processing
+
+```{r}
+# Include all necessary libraries
+library(tidytext)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(wordcloud)
+library(tm)
+```
+
+```{r}
+# Loading stop words
+stop_words <- read_file("data/stop_words.txt")
+splittedStopWords <- strsplit(stop_words, split='\n')
+splittedStopWords <- splittedStopWords[[1]]
+
+# Loading datasets
+test <- read_csv("data/test.csv", show_col_types = FALSE)
+train <- read_csv("data/train.csv", show_col_types = FALSE)
+
+# Function to calculate words frequencies in given dataframe 
+freqDataframe <- function(dataframe, column, stop_words = NULL)
+{
+    dataframe %>%
+	      unnest_tokens(word, column) %>%
+	      count(word, sort = TRUE) %>%
+  	    filter(!word %in% stop_words)
+}
+```
+
+## Data visualization
+
+```{r}
+# Words for visualization
+hamFreqVis <- freqDataframe(test[test$Category=="ham", ], "Message", splittedStopWords)
+spamFreqVis <- freqDataframe(test[test$Category=="spam", ], "Message", splittedStopWords)
+
+par(mfrow = c(1, 3))
+                    
+wordcloud(words = hamFreqVis$word, freq=hamFreqVis$n, max.words=30, random.order = FALSE,
+          colors = 'green')
+plot.new()
+wordcloud(words = spamFreqVis$word, freq=spamFreqVis$n, max.words=30, random.order=FALSE,
+          colors = 'red')
+                      
+```
+
+## Classifier implementation
+
+```{r}
+# All used metrics implementations
+recall <- function(y_true, y_pred) {
+    tp <- sum(y_true == y_pred & y_true == TRUE)
+    fn <- sum(y_true != y_pred & y_true == TRUE)
+	
+    return (tp / (tp + fn))
+}
+
+precision <- function(y_true, y_pred) {
+    tp <- sum(y_true == y_pred & y_true == TRUE)
+    fp <- sum(y_true != y_pred & y_true == FALSE)
+	
+    return (tp / (tp + fp))
+}
+
+f1Score <- function(y_true, y_pred) {
+    recallV <- recall(y_true, y_pred)
+    precisionV <- precision(y_true, y_pred)
+	
+    return (2 * precisionV * recallV / (precisionV + recallV))
+}
+
+accuracy <- function(y_true, y_pred)
+{
+    return (sum(y_true == y_pred) / length(y_true))
+}
+```
+
+```{r}
+naiveBayes <- setRefClass("naiveBayes",                      
+    # here it would be wise to have some vars to store intermediate result
+    # frequency dict etc. Though pay attention to bag of words! 
+    fields = list(
+      	hamFreq = "data.frame",
+      	spamFreq = "data.frame",
+      	
+      	hamWordsCount = "numeric",
+      	spamWordsCount = "numeric",
+  
+      	hamClassProb = "numeric",
+      	spamClassProb = "numeric"
+    ),
+    
+    methods = list(
+        # prepare your training data as X - bag of words for each of your
+      	# messages and corresponding label for the message encoded as 0 or 1 
+        # (binary classification task)
+      	fit = function(X, y)
+      	{	    
+      	    hamFreq <<- freqDataframe(X[X$Category=="ham", ], "Message", splittedStopWords)
+      	    spamFreq <<- freqDataframe(X[X$Category=="spam", ], "Message", splittedStopWords)
+      
+      	    hamWordsCount <<- sum(hamFreq$n)
+      	    spamWordsCount <<- sum(spamFreq$n)
+      
+      	    hamClassProb <<- nrow(X[X$Category=="ham", ]) / nrow(X)
+      	    spamClassProb <<- nrow(X[X$Category=="spam", ]) / nrow(X)
+      	},
+                          
+      	# return prediction for a single message 
+      	predict = function(message)
+      	{
+      	    # Check if message is not empty
+      	    if(nchar(message) == 0) { 	
+      		      return (NULL)
+      	    }
+      
+      	    # Convert message to bag of words
+      	    wrapperDf <- data.frame(word = message)
+      	    tokens <- unnest_tokens(wrapperDf, word, word) %>% filter(!word %in% splittedStopWords) 
+      
+      	    hamProb <- hamClassProb
+      	    spamProb <- spamClassProb
+      
+      	    for (i in 1:nrow(tokens))
+      	    {
+          		  word <- tokens[i, ]
+      		
+            		inHamCount <- ifelse(!is.na(any(hamFreq$word == word)) && any(hamFreq$word == word),
+            				     hamFreq[hamFreq$word == word, "n"]$n,
+            				     0)
+            		inSpamCount <- ifelse(!is.na(any(spamFreq$word == word)) && any(spamFreq$word == word),
+            				      spamFreq[spamFreq$word == word, "n"]$n,
+            				      0)
+            		
+            		hamProb <- hamProb * (inHamCount + 1) / (hamWordsCount + 2)
+            		spamProb <- spamProb * (inSpamCount + 1) / (spamWordsCount + 2)
+          	}
+      
+      	    return (hamProb > spamProb)
+      	},
+                          
+        # score you test set so to get the understanding how well you model
+        # works.
+        # look at f1 score or precision and recall
+      	# visualize them 
+        # try how well your model generalizes to real world data! 
+      	score = function(X_test, y_test)
+      	{
+      	    y_pred <- lapply(X_test$Message, function(message) { predict(message) })
+      	    
+      	    scores = c(
+      	    	  "accuracy"  = accuracy(y_test, y_pred),
+      		      "precision" = precision(y_test, y_pred),
+      		      "recall"    = recall(y_test, y_pred),
+      		      "f1Score"   = f1Score(y_test, y_pred)
+      	    )
+      
+      	    return (scores)
+      	}
+))
+
+# Create and fit model
+model = naiveBayes()
+model$fit(train, train$Category)
+```
+
+## Measure effectiveness of your classifier
+
+```{r}
+# Example of score results
+model$score(test, test$Category == "ham")
+```
+
+```{r}
+# Get scores for different sizes
+trainSizes <- c(0.1, 0.2, 0.3, 0.5, 0.7, 0.8, 0.9, 1.0)
+
+accuracyScores <- c()
+precisionScores <- c()
+recallScores <- c()
+f1Scores <- c()
+
+tmodel = naiveBayes()
+
+for (trainSize in trainSizes)
+{
+	  trainSample <- train[sample(nrow(train), floor(nrow(train) * trainSize)), ]
+  	tmodel$fit(trainSample, trainSample$Category)
+  	scores <- tmodel$score(test, test$Category == "ham")
+
+	  accuracyScores <- c(accuracyScores, scores["accuracy"])
+	  precisionScores <- c(precisionScores, scores["precision"])
+	  recallScores <- c(recallScores, scores["recall"])
+	  f1Scores <- c(f1Scores, scores["f1Score"])
+}
+```
+
+```{r}
+df_reshaped <- data.frame(x = trainSizes,                            
+                       y = c(accuracyScores, precisionScores, recallScores, f1Scores),
+                       group = c(rep("Accuracy", length(trainSizes)),
+                                 rep("Precision", length(trainSizes)),
+                                 rep("Recall", length(trainSizes)),
+                                 rep("F1", length(trainSizes))
+                                 ))
+ 
+ggplot(df_reshaped, aes(x, y, col = group)) +  geom_line()
+```
+
+#### Failure cases
+
+```{r}
+convert_label <- function(x) { ifelse(x == "ham", TRUE, FALSE) }
+
+y_pred <- lapply(test$Message, function(message) { model$predict(message) })
+failureCases <- test[y_pred != convert_label(test$Category), ]
+
+failureCases
+```
+
+## Check on real world data
+
+```{r}
+model$predict("") # should return NULL
+model$predict("Hello, how are you?") # should return TRUE
+model$predict("WINNER!! This is the secret code to unlock the money: C3421.") # should return FALSE
+```
+
+## Conclusions
+
+Summarize your work by explaining in a few sentences the points listed
+below.
+
+-   Describe the method implemented in general. Show what are
+    mathematical foundations you are basing your solution on.
+-   List pros and cons of the method. This should include the
+    limitations of your method, all the assumption you make about the
+    nature of your data etc.
+-   The method is called **Naive Bayes classifier**. In our case we used
+    is to filter **spam** messages from **non-spam**(ham). Firstly, we
+    calculate frequencies of words to be in spam and ham messages.
+    Forming bag-of-words. After that, for given text message we can
+    calculate its probability to be spam/ham using **Bayes formula**. We
+    assume that all features(words) are **independent**. To find
+    probability of message belong to some class we multiply probability
+    of class by product of probability of each word given the class and
+    divide this by product of probabilities of each word(actually, we
+    can skip this because it is common for each class and is not useful
+    in comparison). Also we used **Laplace Smoothing** to prevent
+    probability of some word being 0.
+-   **Pros** of this method - easy to implement, computationally light.
+    **Cons** - *naivety* of this method(we assume that all words are
+    independent and do not consider words order), words that often
+    appear in one class can be in other and lead to incorrect
+    classification results.
